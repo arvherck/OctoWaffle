@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RATE_CARD } from "./rateCard";
-import {
-  BASE_CURRENCY,
-  SUPPORTED_CURRENCIES,
-  getExchangeRate,
-} from "./exchangeRates";
+import { BASE_CURRENCY, useExchangeRates } from "./useExchangeRates";
 
 const COUNTRY_OPTIONS = Object.keys(RATE_CARD);
 const SENIORITY_OPTIONS = Object.keys(RATE_CARD[COUNTRY_OPTIONS[0]] ?? {});
+const CURRENCY_OPTIONS = ["EUR", "USD", "GBP", "SEK"];
 
 const getRateFromCard = (country, seniority) => RATE_CARD[country]?.[seniority] ?? 0;
+
+const formatTimestamp = (timestamp) =>
+  new Date(timestamp).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 
 function App() {
   const [consultants, setConsultants] = useState([
@@ -28,8 +31,28 @@ function App() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [updatedConsultantId, setUpdatedConsultantId] = useState(null);
 
+  const {
+    rates,
+    source,
+    lastUpdated,
+    dataPulledAt,
+    loading,
+    isFallback,
+  } = useExchangeRates();
+
+  const availableCurrencies = useMemo(
+    () => CURRENCY_OPTIONS.filter((currencyCode) => rates[currencyCode]),
+    [rates]
+  );
+
   const calculationTimerRef = useRef(null);
   const updateFlashTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (!availableCurrencies.includes(selectedCurrency)) {
+      setSelectedCurrency(BASE_CURRENCY);
+    }
+  }, [availableCurrencies, selectedCurrency]);
 
   useEffect(() => {
     return () => {
@@ -43,16 +66,25 @@ function App() {
     };
   }, []);
 
-  const formatCurrency = (amount) =>
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: selectedCurrency,
-      maximumFractionDigits: 2,
-    }).format(amount);
+  const currencyFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: selectedCurrency,
+        maximumFractionDigits: 2,
+      }),
+    [selectedCurrency]
+  );
+
+  const formatCurrency = (amount) => currencyFormatter.format(amount);
 
   const convertFromBaseCurrency = (amount) => {
-    const rate = getExchangeRate(BASE_CURRENCY, selectedCurrency);
-    return amount * rate;
+    if (selectedCurrency === BASE_CURRENCY) {
+      return amount;
+    }
+
+    const conversionRate = rates[selectedCurrency] ?? 1;
+    return amount * conversionRate;
   };
 
   const addConsultant = () => {
@@ -95,7 +127,10 @@ function App() {
     [consultants]
   );
 
-  const convertedTotalProjectPrice = convertFromBaseCurrency(totalProjectPrice);
+  const convertedTotalProjectPrice = useMemo(
+    () => convertFromBaseCurrency(totalProjectPrice),
+    [totalProjectPrice, selectedCurrency, rates]
+  );
 
   const hasMissingRequired = consultants.some(
     (c) => !c.country || !c.seniority
@@ -128,7 +163,7 @@ function App() {
           value={selectedCurrency}
           onChange={(e) => setSelectedCurrency(e.target.value)}
         >
-          {SUPPORTED_CURRENCIES.map((currencyCode) => (
+          {availableCurrencies.map((currencyCode) => (
             <option key={currencyCode} value={currencyCode}>
               {currencyCode}
             </option>
@@ -306,6 +341,13 @@ function App() {
 
       <section className="summary-card" aria-live="polite">
         <h2>Total Project Price: {formatCurrency(convertedTotalProjectPrice)}</h2>
+        {loading && <p>Fetching latest exchange rates...</p>}
+        {isFallback && (
+          <p role="alert">Failed to fetch live rates. Using fallback rates.</p>
+        )}
+        <p>Exchange Rate Source: {source}</p>
+        <p>Rates Last Updated: {formatTimestamp(lastUpdated)}</p>
+        <p>Data Pulled At: {formatTimestamp(dataPulledAt)}</p>
 
         <h3>Summary</h3>
         {consultants.map((c) => {
@@ -317,7 +359,7 @@ function App() {
             <div key={`summary-${c.id}`} className="summary-line">
               <span>{c.name}</span>
               <span>
-                Rate: {formatCurrency(rate)}/h | Hours: {totalHours}h | Allocation: {" "}
+                Rate: {formatCurrency(rate)}/h | Hours: {totalHours}h | Allocation:{" "}
                 {c.allocation}% | Total: {formatCurrency(total)}
               </span>
             </div>
