@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RATE_CARD } from "./rateCard";
-import { BASE_CURRENCY, useExchangeRates } from "./useExchangeRates";
+import {
+  BASE_CURRENCY,
+  SUPPORTED_CURRENCIES,
+  getExchangeRates,
+} from "./exchangeRates";
 
 const COUNTRY_OPTIONS = Object.keys(RATE_CARD);
 const SENIORITY_OPTIONS = Object.keys(RATE_CARD[COUNTRY_OPTIONS[0]] ?? {});
-const CURRENCY_OPTIONS = ["EUR", "USD", "GBP", "SEK"];
+const CURRENCY_LOCALE_MAP = {
+  EUR: "de-DE",
+  USD: "en-US",
+  GBP: "en-GB",
+  SEK: "sv-SE",
+};
 
 const getRateFromCard = (country, seniority) => RATE_CARD[country]?.[seniority] ?? 0;
 
@@ -28,31 +37,16 @@ function App() {
   ]);
 
   const [selectedCurrency, setSelectedCurrency] = useState(BASE_CURRENCY);
+  const [exchangeRates, setExchangeRates] = useState({ [BASE_CURRENCY]: 1 });
+  const [selectedCurrencyRate, setSelectedCurrencyRate] = useState(1);
+  const [ratesLastUpdatedAt, setRatesLastUpdatedAt] = useState(new Date().toISOString());
+  const [ratesLoading, setRatesLoading] = useState(false);
+  const [ratesError, setRatesError] = useState("");
   const [isCalculating, setIsCalculating] = useState(false);
   const [updatedConsultantId, setUpdatedConsultantId] = useState(null);
 
-  const {
-    rates,
-    source,
-    lastUpdated,
-    dataPulledAt,
-    loading,
-    isFallback,
-  } = useExchangeRates();
-
-  const availableCurrencies = useMemo(
-    () => CURRENCY_OPTIONS.filter((currencyCode) => rates[currencyCode]),
-    [rates]
-  );
-
   const calculationTimerRef = useRef(null);
   const updateFlashTimerRef = useRef(null);
-
-  useEffect(() => {
-    if (!availableCurrencies.includes(selectedCurrency)) {
-      setSelectedCurrency(BASE_CURRENCY);
-    }
-  }, [availableCurrencies, selectedCurrency]);
 
   useEffect(() => {
     return () => {
@@ -66,26 +60,58 @@ function App() {
     };
   }, []);
 
-  const currencyFormatter = useMemo(
-    () =>
-      new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: selectedCurrency,
-        maximumFractionDigits: 2,
-      }),
-    [selectedCurrency]
-  );
+  useEffect(() => {
+    let isMounted = true;
 
-  const formatCurrency = (amount) => currencyFormatter.format(amount);
+    const loadRates = async () => {
+      setRatesLoading(true);
+      setRatesError("");
 
-  const convertFromBaseCurrency = (amount) => {
-    if (selectedCurrency === BASE_CURRENCY) {
-      return amount;
-    }
+      try {
+        const latestRates = await getExchangeRates();
 
-    const conversionRate = rates[selectedCurrency] ?? 1;
-    return amount * conversionRate;
+        if (!isMounted) {
+          return;
+        }
+
+        const nextRate = latestRates[selectedCurrency] ?? 1;
+        setExchangeRates(latestRates);
+        setSelectedCurrencyRate(nextRate);
+        setRatesLastUpdatedAt(new Date().toISOString());
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setSelectedCurrencyRate(exchangeRates[selectedCurrency] ?? 1);
+        setRatesError(
+          "We couldn't refresh exchange rates right now. Totals are shown with the most recently available rate."
+        );
+      } finally {
+        if (isMounted) {
+          setRatesLoading(false);
+        }
+      }
+    };
+
+    loadRates();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedCurrency]);
+
+  const formatCurrency = (amount, currencyCode) => {
+    const locale = CURRENCY_LOCALE_MAP[currencyCode] ?? "en-US";
+
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: currencyCode,
+      maximumFractionDigits: 2,
+    }).format(amount);
   };
+
+  const convertFromEuro = (amountInEuro) => amountInEuro * selectedCurrencyRate;
 
   const addConsultant = () => {
     setConsultants([
@@ -122,14 +148,14 @@ function App() {
     return rate * c.hoursPerWeek * c.weeks * (c.allocation / 100);
   };
 
-  const totalProjectPrice = useMemo(
+  const totalProjectPriceEur = useMemo(
     () => consultants.reduce((sum, c) => sum + calculateConsultantTotal(c), 0),
     [consultants]
   );
 
-  const convertedTotalProjectPrice = useMemo(
-    () => convertFromBaseCurrency(totalProjectPrice),
-    [totalProjectPrice, selectedCurrency, rates]
+  const totalProjectPriceConverted = useMemo(
+    () => convertFromEuro(totalProjectPriceEur),
+    [totalProjectPriceEur, selectedCurrencyRate]
   );
 
   const hasMissingRequired = consultants.some(
@@ -163,7 +189,7 @@ function App() {
           value={selectedCurrency}
           onChange={(e) => setSelectedCurrency(e.target.value)}
         >
-          {availableCurrencies.map((currencyCode) => (
+          {SUPPORTED_CURRENCIES.map((currencyCode) => (
             <option key={currencyCode} value={currencyCode}>
               {currencyCode}
             </option>
@@ -172,12 +198,11 @@ function App() {
       </div>
 
       {consultants.map((c) => {
-        const currentBaseRate = getRateFromCard(c.country, c.seniority);
-        const currentRate = convertFromBaseCurrency(currentBaseRate);
+        const currentEurRate = getRateFromCard(c.country, c.seniority);
+        const currentRate = convertFromEuro(currentEurRate);
         const hasSelectionError = !c.country || !c.seniority;
-        const convertedConsultantTotal = convertFromBaseCurrency(
-          calculateConsultantTotal(c)
-        );
+        const consultantTotalEur = calculateConsultantTotal(c);
+        const convertedConsultantTotal = convertFromEuro(consultantTotalEur);
 
         return (
           <section
@@ -290,13 +315,6 @@ function App() {
                     />
                     <span className="unit">%</span>
                   </div>
-                  <p
-                    className="helper-text"
-                    title="Allocation applies the selected % of total consultant capacity to project cost."
-                  >
-                    Allocation % applies a utilization factor to the total consultant
-                    cost.
-                  </p>
                 </div>
               </div>
             </div>
@@ -304,13 +322,17 @@ function App() {
             <div className="rate-panel" aria-live="polite">
               <p className="rate-label">Hourly Rate Applied</p>
               <p className="rate-value">
-                {formatCurrency(currentRate)}
+                {formatCurrency(currentRate, selectedCurrency)}
                 <span className="unit-inline">/h</span>
               </p>
+              <p className="helper-text">EUR Base: {formatCurrency(currentEurRate, BASE_CURRENCY)}/h</p>
             </div>
 
             <h4 className="consultant-total">
-              Consultant Total: {formatCurrency(convertedConsultantTotal)}
+              Consultant Total: {formatCurrency(convertedConsultantTotal, selectedCurrency)}
+              <span className="summary-subline">
+                ({formatCurrency(consultantTotalEur, BASE_CURRENCY)})
+              </span>
             </h4>
           </section>
         );
@@ -340,27 +362,31 @@ function App() {
       <hr className="divider" />
 
       <section className="summary-card" aria-live="polite">
-        <h2>Total Project Price: {formatCurrency(convertedTotalProjectPrice)}</h2>
-        {loading && <p>Fetching latest exchange rates...</p>}
-        {isFallback && (
-          <p role="alert">Failed to fetch live rates. Using fallback rates.</p>
-        )}
-        <p>Exchange Rate Source: {source}</p>
-        <p>Rates Last Updated: {formatTimestamp(lastUpdated)}</p>
-        <p>Data Pulled At: {formatTimestamp(dataPulledAt)}</p>
+        <h2>Total Project Price (EUR): {formatCurrency(totalProjectPriceEur, BASE_CURRENCY)}</h2>
+        <h3>
+          Total Project Price ({selectedCurrency}): {formatCurrency(totalProjectPriceConverted, selectedCurrency)}
+        </h3>
+        {ratesLoading && <p>Fetching latest exchange rates...</p>}
+        {ratesError && <p role="alert">{ratesError}</p>}
+        <p>
+          1 EUR = {selectedCurrencyRate.toFixed(4)} {selectedCurrency}
+        </p>
+        <p>Rates Last Updated: {formatTimestamp(ratesLastUpdatedAt)}</p>
 
         <h3>Summary</h3>
         {consultants.map((c) => {
-          const rate = convertFromBaseCurrency(getRateFromCard(c.country, c.seniority));
+          const rateEur = getRateFromCard(c.country, c.seniority);
+          const rateConverted = convertFromEuro(rateEur);
           const totalHours = c.hoursPerWeek * c.weeks;
-          const total = convertFromBaseCurrency(calculateConsultantTotal(c));
+          const totalEur = calculateConsultantTotal(c);
+          const totalConverted = convertFromEuro(totalEur);
 
           return (
             <div key={`summary-${c.id}`} className="summary-line">
               <span>{c.name}</span>
               <span>
-                Rate: {formatCurrency(rate)}/h | Hours: {totalHours}h | Allocation:{" "}
-                {c.allocation}% | Total: {formatCurrency(total)}
+                Rate: {formatCurrency(rateConverted, selectedCurrency)}/h ({formatCurrency(rateEur, BASE_CURRENCY)}/h) | Hours: {totalHours}h |
+                Allocation: {c.allocation}% | Total: {formatCurrency(totalConverted, selectedCurrency)} ({formatCurrency(totalEur, BASE_CURRENCY)})
               </span>
             </div>
           );
