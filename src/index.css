@@ -24,6 +24,12 @@ body {
   line-height: 1.2;
 }
 
+
+.currency-select-wrap {
+  max-width: 240px;
+  margin-bottom: 18px;
+}
+
 .consultant-card {
   border: 1px solid #d7deea;
   border-radius: 12px;

@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RATE_CARD } from "./rateCard";
+import {
+  BASE_CURRENCY,
+  SUPPORTED_CURRENCIES,
+  getExchangeRate,
+} from "./exchangeRates";
 
 const COUNTRY_OPTIONS = Object.keys(RATE_CARD);
 const SENIORITY_OPTIONS = Object.keys(RATE_CARD[COUNTRY_OPTIONS[0]] ?? {});
-const CURRENCY_SYMBOL = "\u20AC";
 
 const getRateFromCard = (country, seniority) => RATE_CARD[country]?.[seniority] ?? 0;
 
@@ -20,6 +24,7 @@ function App() {
     },
   ]);
 
+  const [selectedCurrency, setSelectedCurrency] = useState(BASE_CURRENCY);
   const [isCalculating, setIsCalculating] = useState(false);
   const [updatedConsultantId, setUpdatedConsultantId] = useState(null);
 
@@ -37,6 +42,18 @@ function App() {
       }
     };
   }, []);
+
+  const formatCurrency = (amount) =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: selectedCurrency,
+      maximumFractionDigits: 2,
+    }).format(amount);
+
+  const convertFromBaseCurrency = (amount) => {
+    const rate = getExchangeRate(BASE_CURRENCY, selectedCurrency);
+    return amount * rate;
+  };
 
   const addConsultant = () => {
     setConsultants([
@@ -78,6 +95,8 @@ function App() {
     [consultants]
   );
 
+  const convertedTotalProjectPrice = convertFromBaseCurrency(totalProjectPrice);
+
   const hasMissingRequired = consultants.some(
     (c) => !c.country || !c.seniority
   );
@@ -102,9 +121,28 @@ function App() {
     <div className="app-shell">
       <h1 className="app-title">Consulting Project Calculator</h1>
 
+      <div className="field-wrap currency-select-wrap">
+        <label htmlFor="contract-currency">Contract Currency</label>
+        <select
+          id="contract-currency"
+          value={selectedCurrency}
+          onChange={(e) => setSelectedCurrency(e.target.value)}
+        >
+          {SUPPORTED_CURRENCIES.map((currencyCode) => (
+            <option key={currencyCode} value={currencyCode}>
+              {currencyCode}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {consultants.map((c) => {
-        const currentRate = getRateFromCard(c.country, c.seniority);
+        const currentBaseRate = getRateFromCard(c.country, c.seniority);
+        const currentRate = convertFromBaseCurrency(currentBaseRate);
         const hasSelectionError = !c.country || !c.seniority;
+        const convertedConsultantTotal = convertFromBaseCurrency(
+          calculateConsultantTotal(c)
+        );
 
         return (
           <section
@@ -217,8 +255,12 @@ function App() {
                     />
                     <span className="unit">%</span>
                   </div>
-                  <p className="helper-text" title="Allocation applies the selected % of total consultant capacity to project cost.">
-                    Allocation % applies a utilization factor to the total consultant cost.
+                  <p
+                    className="helper-text"
+                    title="Allocation applies the selected % of total consultant capacity to project cost."
+                  >
+                    Allocation % applies a utilization factor to the total consultant
+                    cost.
                   </p>
                 </div>
               </div>
@@ -227,15 +269,13 @@ function App() {
             <div className="rate-panel" aria-live="polite">
               <p className="rate-label">Hourly Rate Applied</p>
               <p className="rate-value">
-                {CURRENCY_SYMBOL}
-                {currentRate ? currentRate.toLocaleString() : 0}
+                {formatCurrency(currentRate)}
                 <span className="unit-inline">/h</span>
               </p>
             </div>
 
             <h4 className="consultant-total">
-              Consultant Total: {CURRENCY_SYMBOL}
-              {calculateConsultantTotal(c).toLocaleString()}
+              Consultant Total: {formatCurrency(convertedConsultantTotal)}
             </h4>
           </section>
         );
@@ -265,24 +305,20 @@ function App() {
       <hr className="divider" />
 
       <section className="summary-card" aria-live="polite">
-        <h2>
-          Total Project Price: {CURRENCY_SYMBOL}
-          {totalProjectPrice.toLocaleString()}
-        </h2>
+        <h2>Total Project Price: {formatCurrency(convertedTotalProjectPrice)}</h2>
 
         <h3>Summary</h3>
         {consultants.map((c) => {
-          const rate = getRateFromCard(c.country, c.seniority);
+          const rate = convertFromBaseCurrency(getRateFromCard(c.country, c.seniority));
           const totalHours = c.hoursPerWeek * c.weeks;
-          const total = calculateConsultantTotal(c);
+          const total = convertFromBaseCurrency(calculateConsultantTotal(c));
 
           return (
             <div key={`summary-${c.id}`} className="summary-line">
               <span>{c.name}</span>
               <span>
-                Rate: {CURRENCY_SYMBOL}
-                {rate.toLocaleString()}/h | Hours: {totalHours}h | Allocation: {c.allocation}% | Total: {CURRENCY_SYMBOL}
-                {total.toLocaleString()}
+                Rate: {formatCurrency(rate)}/h | Hours: {totalHours}h | Allocation: {" "}
+                {c.allocation}% | Total: {formatCurrency(total)}
               </span>
             </div>
           );
