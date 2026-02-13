@@ -1,20 +1,19 @@
 export const BASE_CURRENCY = "EUR";
+export const SUPPORTED_CURRENCIES = ["EUR", "USD", "GBP", "SEK"];
 
-export const EXCHANGE_RATES = {
-  EUR: { USD: 1.08, GBP: 0.87 },
-  USD: { EUR: 0.93, GBP: 0.8 },
-  GBP: { EUR: 1.14, USD: 1.25 },
-};
+const EXCHANGE_RATES_API = `https://api.frankfurter.app/latest?from=${BASE_CURRENCY}&to=${SUPPORTED_CURRENCIES.join(",")}`;
 
-export const SUPPORTED_CURRENCIES = [
-  BASE_CURRENCY,
-  ...Object.keys(EXCHANGE_RATES[BASE_CURRENCY] ?? {}),
-];
+export async function getExchangeRates() {
+  const response = await fetch(EXCHANGE_RATES_API);
 
-export const getExchangeRate = (baseCurrency, targetCurrency) => {
-  if (baseCurrency === targetCurrency) {
-    return 1;
+  if (!response.ok) {
+    throw new Error(`Failed to fetch exchange rates (${response.status})`);
   }
 
-  return EXCHANGE_RATES[baseCurrency]?.[targetCurrency] ?? 1;
-};
+  const payload = await response.json();
+
+  return {
+    ...payload.rates,
+    [BASE_CURRENCY]: 1,
+  };
+}
